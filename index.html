@@ -46,6 +46,7 @@
             padding: 10px 14px;
             border-radius: 6px;
             border: 1px solid var(--border-color);
+            word-break: break-word;
         }
 
         .controls {
@@ -132,7 +133,7 @@
     const transcriptBox = document.getElementById('transcriptBox');
     const summaryBox = document.getElementById('summaryBox');
 
-    // 1. Microphone Start Handler
+    // 1. Start Recording
     startBtn.addEventListener('click', async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -153,7 +154,7 @@
         }
     });
 
-    // 2. Microphone Stop Handler
+    // 2. Stop Recording & Trigger Processing
     stopBtn.addEventListener('click', () => {
         mediaRecorder.stop();
         mediaRecorder.stream.getTracks().forEach(track => track.stop());
@@ -168,13 +169,13 @@
         };
     });
 
-    // 3. Send Audio to Cloudflare Worker
+    // 3. Process via Cloudflare Worker
     async function processAudio(audioBlob) {
         const formData = new FormData();
         formData.append('file', audioBlob, 'speech.m4a');
 
         try {
-            // Step A: Transcribe via Worker Proxy
+            // Step A: Transcribe
             statusEl.textContent = "Status: Transcribing speech...";
             const whisperRes = await fetch(`${PROXY_URL}/transcribe`, {
                 method: 'POST',
@@ -182,12 +183,18 @@
             });
 
             const whisperData = await whisperRes.json();
-            if (whisperData.error) throw new Error(whisperData.error);
+            
+            if (!whisperRes.ok || whisperData.error) {
+                const errDetail = typeof whisperData.error === 'object' 
+                    ? JSON.stringify(whisperData.error) 
+                    : (whisperData.error || 'Transcription request failed');
+                throw new Error(errDetail);
+            }
 
             const transcriptText = whisperData.text || "No speech detected.";
             transcriptBox.textContent = transcriptText;
 
-            // Step B: Summarize via Worker Proxy
+            // Step B: Summarize
             statusEl.textContent = "Status: Extracting key pointers...";
             const summaryRes = await fetch(`${PROXY_URL}/summarize`, {
                 method: 'POST',
@@ -196,7 +203,13 @@
             });
 
             const summaryData = await summaryRes.json();
-            if (summaryData.error) throw new Error(summaryData.error);
+            
+            if (!summaryRes.ok || summaryData.error) {
+                const errDetail = typeof summaryData.error === 'object' 
+                    ? JSON.stringify(summaryData.error) 
+                    : (summaryData.error || 'Summarization request failed');
+                throw new Error(errDetail);
+            }
 
             summaryBox.textContent = summaryData.choices[0].message.content;
             statusEl.textContent = "Status: Complete!";

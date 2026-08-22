@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Instant Hinglish Transcriber</title>
+    <title>Live Fast Transcriber</title>
     <style>
         body {
             font-family: system-ui, -apple-system, sans-serif;
@@ -30,12 +30,24 @@
             font-size: 1.1rem; line-height: 1.6;
         }
         #status { font-size: 0.9rem; color: #94a3b8; margin-bottom: 10px; }
+        .select-group { margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
+        select { padding: 8px; background: #1e1e1e; color: #e2e8f0; border: 1px solid #334155; border-radius: 4px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Instant Hinglish Transcriber</h2>
+    <h2>Fast Live Speech-to-Text</h2>
+    
+    <div class="select-group">
+        <label for="langSelect">Speaking Language Mode:</label>
+        <select id="langSelect">
+            <option value="en-IN" selected>English / Hinglish (en-IN)</option>
+            <option value="en-US">English Only (en-US)</option>
+            <option value="hi-IN">Pure Hindi (hi-IN)</option>
+        </select>
+    </div>
+
     <div id="status">Status: Idle</div>
 
     <div class="controls">
@@ -43,7 +55,7 @@
         <button id="stopBtn" disabled>Stop</button>
     </div>
 
-    <div id="output" class="box">Spoken words in English alphabets will appear here instantly...</div>
+    <div id="output" class="box">Transcribed text will appear here instantly...</div>
 </div>
 
 <script>
@@ -51,60 +63,39 @@
     const stopBtn = document.getElementById('stopBtn');
     const outputEl = document.getElementById('output');
     const statusEl = document.getElementById('status');
+    const langSelect = document.getElementById('langSelect');
 
-    // Phonetic map to convert Devanagari characters directly to English alphabets
-    const devanagariToRomanMap = {
-        'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri',
-        'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'अं': 'an', 'अः': 'ah',
-        'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'ng',
-        'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'nya',
-        'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n',
-        'त': 't', 'थ': 'th', 'द': 'd', 'ध': 'dh', 'न': 'n',
-        'प': 'p', 'फ': 'ph', 'ब': 'b', 'भ': 'bh', 'म': 'm',
-        'य': 'y', 'र': 'r', 'ल': 'l', 'व': 'v', 'श': 'sh',
-        'ष': 'sh', 'स': 's', 'ह': 'h',
-        'ा': 'a', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo',
-        'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n', '्': ''
-    };
-
-    function transliterateToRoman(text) {
-        return text.split('').map(char => devanagariToRomanMap[char] || char).join('');
-    }
-
-    // Initialize Native Browser Speech Recognition
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-        statusEl.textContent = "Error: Speech Recognition is not supported in this browser. Please use Chrome or Edge.";
+        statusEl.textContent = "Error: Use Chrome or Edge for Speech Recognition.";
         startBtn.disabled = true;
     } else {
         const recognition = new SpeechRecognition();
-        
-        // Listen in Hindi & English hybrid mode
-        recognition.lang = 'hi-IN'; 
         recognition.continuous = true;
         recognition.interimResults = true;
 
         recognition.onstart = () => {
-            statusEl.textContent = "Status: Listening... Speak in Hindi or English";
+            statusEl.textContent = `Status: Listening in ${langSelect.options[langSelect.selectedIndex].text}...`;
             startBtn.disabled = true;
             stopBtn.disabled = false;
+            langSelect.disabled = true;
         };
 
         recognition.onresult = (event) => {
+            let interimScript = '';
             let finalScript = '';
+
             for (let i = event.resultIndex; i < event.results.length; ++i) {
                 if (event.results[i].isFinal) {
-                    const rawHindi = event.results[i][0].transcript;
-                    
-                    // Convert raw Hindi script to English alphabets
-                    const romanized = transliterateToRoman(rawHindi);
-                    finalScript += romanized + ' ';
+                    finalScript += event.results[i][0].transcript + ' ';
+                } else {
+                    interimScript += event.results[i][0].transcript;
                 }
             }
 
-            if (finalScript.trim().length > 0) {
-                if (outputEl.textContent.includes("Spoken words")) outputEl.textContent = '';
+            if (finalScript.length > 0) {
+                if (outputEl.textContent.includes("Transcribed text will appear")) outputEl.textContent = '';
                 outputEl.textContent += finalScript;
                 outputEl.scrollTop = outputEl.scrollHeight;
             }
@@ -118,9 +109,14 @@
             statusEl.textContent = "Status: Stopped";
             startBtn.disabled = false;
             stopBtn.disabled = true;
+            langSelect.disabled = false;
         };
 
-        startBtn.addEventListener('click', () => recognition.start());
+        startBtn.addEventListener('click', () => {
+            recognition.lang = langSelect.value;
+            recognition.start();
+        });
+
         stopBtn.addEventListener('click', () => recognition.stop());
     }
 </script>

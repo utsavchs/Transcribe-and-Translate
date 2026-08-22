@@ -3,121 +3,208 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Fast Transcriber</title>
+    <title>Voice Transcriber & Summarizer</title>
     <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --border-color: #334155;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --accent: #60a5fa;
+            --success: #16a34a;
+            --danger: #dc2626;
+        }
+
         body {
             font-family: system-ui, -apple-system, sans-serif;
-            background-color: #121212;
-            color: #e2e8f0;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            margin: 0;
             padding: 20px;
             display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 650px;
+            display: flex;
             flex-direction: column;
-            align-items: center;
+            gap: 16px;
         }
-        .container { width: 100%; max-width: 600px; }
-        .controls { display: flex; gap: 10px; margin-bottom: 15px; }
+
+        h2 {
+            margin: 0 0 5px 0;
+            color: var(--text-primary);
+        }
+
+        .status-bar {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            background: var(--card-bg);
+            padding: 10px 14px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+        }
+
         button {
-            flex: 1; padding: 12px; font-size: 1rem; font-weight: bold;
-            border: none; border-radius: 6px; cursor: pointer;
+            flex: 1;
+            padding: 14px;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
         }
-        #startBtn { background: #16a34a; color: white; }
-        #stopBtn { background: #dc2626; color: white; }
-        button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        #startBtn {
+            background-color: var(--success);
+            color: white;
+        }
+
+        #stopBtn {
+            background-color: var(--danger);
+            color: white;
+        }
+
+        .section-title {
+            margin: 10px 0 5px 0;
+            color: var(--accent);
+            font-size: 1.1rem;
+        }
+
         .box {
-            background: #1e1e1e; border: 1px solid #334155;
-            border-radius: 8px; padding: 15px; height: 300px;
-            overflow-y: auto; font-family: monospace; white-space: pre-wrap;
-            font-size: 1.1rem; line-height: 1.6;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            min-height: 120px;
+            max-height: 250px;
+            overflow-y: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            font-size: 0.95rem;
         }
-        #status { font-size: 0.9rem; color: #94a3b8; margin-bottom: 10px; }
-        .select-group { margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
-        select { padding: 8px; background: #1e1e1e; color: #e2e8f0; border: 1px solid #334155; border-radius: 4px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Fast Live Speech-to-Text</h2>
+    <h2>Voice Transcriber & Summarizer</h2>
     
-    <div class="select-group">
-        <label for="langSelect">Speaking Language Mode:</label>
-        <select id="langSelect">
-            <option value="en-IN" selected>English / Hinglish (en-IN)</option>
-            <option value="en-US">English Only (en-US)</option>
-            <option value="hi-IN">Pure Hindi (hi-IN)</option>
-        </select>
-    </div>
-
-    <div id="status">Status: Idle</div>
+    <div id="status" class="status-bar">Status: Ready to record</div>
 
     <div class="controls">
-        <button id="startBtn">Start Listening</button>
-        <button id="stopBtn" disabled>Stop</button>
+        <button id="startBtn">Start Recording</button>
+        <button id="stopBtn" disabled>Stop & Process</button>
     </div>
 
-    <div id="output" class="box">Transcribed text will appear here instantly...</div>
+    <div class="section-title">Full Transcript (100% Captured)</div>
+    <div id="transcriptBox" class="box">Your transcribed text will appear here...</div>
+
+    <div class="section-title">Key Pointers & Action Items</div>
+    <div id="summaryBox" class="box">Important summary points will be generated automatically...</div>
 </div>
 
 <script>
+    // Live Cloudflare Worker Proxy URL
+    const PROXY_URL = 'https://groq-audio-proxy.utsavchs.workers.dev';
+
+    let mediaRecorder;
+    let audioChunks = [];
+
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
-    const outputEl = document.getElementById('output');
     const statusEl = document.getElementById('status');
-    const langSelect = document.getElementById('langSelect');
+    const transcriptBox = document.getElementById('transcriptBox');
+    const summaryBox = document.getElementById('summaryBox');
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    // 1. Microphone Start Handler
+    startBtn.addEventListener('click', async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
 
-    if (!SpeechRecognition) {
-        statusEl.textContent = "Error: Use Chrome or Edge for Speech Recognition.";
-        startBtn.disabled = true;
-    } else {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) audioChunks.push(e.data);
+            };
 
-        recognition.onstart = () => {
-            statusEl.textContent = `Status: Listening in ${langSelect.options[langSelect.selectedIndex].text}...`;
+            mediaRecorder.start();
+
+            statusEl.textContent = "Status: Recording... Speak clearly (100% audio captured)";
             startBtn.disabled = true;
             stopBtn.disabled = false;
-            langSelect.disabled = true;
+        } catch (err) {
+            statusEl.textContent = `Microphone Error: ${err.message}`;
+        }
+    });
+
+    // 2. Microphone Stop Handler
+    stopBtn.addEventListener('click', () => {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(track => track.stop());
+
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        statusEl.textContent = "Status: Processing audio via Proxy...";
+
+        mediaRecorder.onstop = async () => {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/m4a' });
+            await processAudio(audioBlob);
         };
+    });
 
-        recognition.onresult = (event) => {
-            let interimScript = '';
-            let finalScript = '';
+    // 3. Send Audio to Cloudflare Worker
+    async function processAudio(audioBlob) {
+        const formData = new FormData();
+        formData.append('file', audioBlob, 'speech.m4a');
 
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-                if (event.results[i].isFinal) {
-                    finalScript += event.results[i][0].transcript + ' ';
-                } else {
-                    interimScript += event.results[i][0].transcript;
-                }
-            }
+        try {
+            // Step A: Transcribe via Worker Proxy
+            statusEl.textContent = "Status: Transcribing speech...";
+            const whisperRes = await fetch(`${PROXY_URL}/transcribe`, {
+                method: 'POST',
+                body: formData
+            });
 
-            if (finalScript.length > 0) {
-                if (outputEl.textContent.includes("Transcribed text will appear")) outputEl.textContent = '';
-                outputEl.textContent += finalScript;
-                outputEl.scrollTop = outputEl.scrollHeight;
-            }
-        };
+            const whisperData = await whisperRes.json();
+            if (whisperData.error) throw new Error(whisperData.error);
 
-        recognition.onerror = (event) => {
-            statusEl.textContent = `Error: ${event.error}`;
-        };
+            const transcriptText = whisperData.text || "No speech detected.";
+            transcriptBox.textContent = transcriptText;
 
-        recognition.onend = () => {
-            statusEl.textContent = "Status: Stopped";
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
-            langSelect.disabled = false;
-        };
+            // Step B: Summarize via Worker Proxy
+            statusEl.textContent = "Status: Extracting key pointers...";
+            const summaryRes = await fetch(`${PROXY_URL}/summarize`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: transcriptText })
+            });
 
-        startBtn.addEventListener('click', () => {
-            recognition.lang = langSelect.value;
-            recognition.start();
-        });
+            const summaryData = await summaryRes.json();
+            if (summaryData.error) throw new Error(summaryData.error);
 
-        stopBtn.addEventListener('click', () => recognition.stop());
+            summaryBox.textContent = summaryData.choices[0].message.content;
+            statusEl.textContent = "Status: Complete!";
+
+        } catch (err) {
+            statusEl.textContent = `Error: ${err.message}`;
+            console.error("Processing Error:", err);
+        }
     }
 </script>
 

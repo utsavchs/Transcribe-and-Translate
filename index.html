@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>In-Browser Whisper Translator</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --accent: #2563eb;
+            --text-color: #e2e8f0;
+            --subtext: #94a3b8;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 650px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .status-card {
+            background: var(--card-bg);
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            font-size: 0.95rem;
+            color: var(--subtext);
+        }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        #startBtn { background-color: #16a34a; color: white; }
+        #stopBtn { background-color: #dc2626; color: white; }
+
+        .transcript-box {
+            background: var(--card-bg);
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 16px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+
+        .indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #ef4444;
+            margin-left: 6px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>In-Browser Live Translator</h2>
+    
+    <div id="status" class="status-card">Initializing engine...</div>
+
+    <div class="controls">
+        <button id="startBtn" disabled>Start Listening <span id="recDot" class="indicator"></span></button>
+        <button id="stopBtn" disabled>Stop</button>
+    </div>
+
+    <div id="transcript" class="transcript-box">English output will stream here...</div>
+</div>
+
+<script type="module">
+    // Import Transformers.js directly via CDN ESM module
+    import { pipeline } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
+
+    const statusEl = document.getElementById('status');
+    const transcriptEl = document.getElementById('transcript');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const recDot = document.getElementById('recDot');
+
+    let transcriber = null;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let processingInterval = null;
+
+    // 1. Initialize the Whisper Tiny Model
+    async function loadModel() {
+        try {
+            statusEl.textContent = "Downloading Whisper model (~75MB ONNX weights)...";
+            
+            // Allocate the ASR pipeline using HuggingFace ONNX weights
+            transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny');
+            
+            statusEl.textContent = "Model Ready. Press 'Start Listening'.";
+            startBtn.disabled = false;
+        } catch (err) {
+            statusEl.textContent = `Error loading model: ${err.message}`;
+            console.error(err);
+        }
+    }
+
+    // 2. Process Audio Chunks
+    async function processAudioChunk(audioBlob) {
+        if (!transcriber || audioBlob.size === 0) return;
+
+        statusEl.textContent = "Translating audio snippet...";
+        
+        try {
+            // Convert WebM audio blob to 16kHz Mono Float32Array expected by ONNX model
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            const arrayBuffer = await audioBlob.arrayBuffer();
+            const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            const rawAudio = decodedBuffer.getChannelData(0);
+
+            // Execute local translation
+            const output = await transcriber(rawAudio, {
+                chunk_length_s: 30,
+                stride_length_s: 5,
+                language: null,   // Auto-detect foreign input language
+                task: 'translate' // Natively outputs translated English
+            });
+
+            if (output.text.trim().length > 0) {
+                transcriptEl.textContent += output.text + "\n";
+                transcriptEl.scrollTop = transcriptEl.scrollHeight;
+            }
+            
+            statusEl.textContent = "Listening...";
+        } catch (err) {
+            console.error("Inference Error:", err);
+            statusEl.textContent = "Listening (skipped distorted chunk)...";
+        }
+    }
+
+    // 3. Media Capture Pipeline
+    async function startRecording() {
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        recDot.style.display = 'inline-block';
+        
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) audioChunks.push(e.data);
+            };
+
+            mediaRecorder.start();
+
+            // Slices and translates audio every 4 seconds
+            processingInterval = setInterval(() => {
+                if (mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                    
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        audioChunks = []; // Clear previous window
+                        processAudioChunk(audioBlob);
+                        
+                        // Restart window
+                        if (!startBtn.disabled) return; 
+                        mediaRecorder.start();
+                    };
+                }
+            }, 4000);
+
+            statusEl.textContent = "Listening...";
+        } catch (err) {
+            statusEl.textContent = `Mic Access Denied: ${err.message}`;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            recDot.style.display = 'none';
+        }
+    }
+
+    function stopRecording() {
+        clearInterval(processingInterval);
+        
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+            mediaRecorder.stream.getTracks().forEach(track => track.stop());
+        }
+
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        recDot.style.display = 'none';
+        statusEl.textContent = "Stopped.";
+    }
+
+    startBtn.addEventListener('click', startRecording);
+    stopBtn.addEventListener('click', stopRecording);
+
+    // Run init on startup
+    loadModel();
+</script>
+
+</body>
+</html>
